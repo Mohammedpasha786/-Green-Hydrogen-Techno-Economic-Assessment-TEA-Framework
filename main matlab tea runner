@@ -1,0 +1,236 @@
+%% run_tea_all.m
+% Green Hydrogen Techno-Economic Assessment — Multi-Location Runner
+%
+% Automates loading of solar irradiance and electricity price data,
+% runs Simscape simulation at each location, and computes economic metrics.
+% Uses parallel computing (parfor) when Parallel Computing Toolbox is available.
+%
+% Usage:
+%   results = run_tea_all_locations()
+%   results = run_tea_all_locations(StationData, prices, config)
+%
+% Outputs:
+%   results  — struct array, one per location, containing:
+%              .name, .lcoh, .npv, .irr, .capex, .opex,
+%              .annual_h2_kg, .grid_fraction, .payback_years
+
+function results = run_tea_all_locations(StationData, prices, config)
+
+%% --- Default Configuration 
+if nargin < 3
+    config = default_config();
+end
+if nargin < 2
+    prices = load_default_prices();
+end
+if nargin < 1
+    StationData = load_station_data();
+end
+
+n_locations = numel(StationData);
+fprintf('=== Green Hydrogen TEA ===\n');
+fprintf('Locations  : %d\n', n_locations);
+fprintf('Lifetime   : %d years\n', config.years);
+fprintf('Discount   : %.1f%%\n', config.discount_rate * 100);
+fprintf('PV Capacity: %.0f kW\n', config.pv_capacity_kw);
+fprintf('Battery    : %.0f kWh\n', config.battery_kwh);
+fprintf('Parallel   : %s\n\n', mat2str(config.use_parallel));
+
+%% --- Pre-allocate Results 
+results(n_locations) = struct( ...
+    'name', '', 'state', '', 'lat', 0, 'lon', 0, ...
+    'lcoh', NaN, 'npv', NaN, 'irr', NaN, ...
+    'capex', NaN, 'opex_annual', NaN, ...
+    'annual_h2_kg', NaN, 'grid_fraction', NaN, ...
+    'payback_years', NaN, 'solar_cf', NaN, ...
+    'sim_time_s', NaN);
+
+%% --- Main Loop (parallel if available) 
+use_par = config.use_parallel && license('test', 'Distrib_Computing_Toolbox');
+
+if use_par
+    fprintf('Launching parallel pool...\n');
+    p = gcp('nocreate');
+    if isempty(p), parpool('local'); end
+end
+
+tic_total = tic;
+
+if use_par
+    parfor i = 1:n_locations
+        results(i) = run_single_location(StationData(i), prices, config);
+    end
+else
+    for i = 1:n_locations
+        fprintf('[%d/%d] %s ... ', i, n_locations, StationData(i).Name);
+        t0 = tic;
+        results(i) = run_single_location(StationData(i), prices, config);
+        fprintf('LCOH = $%.2f/kg (%.1fs)\n', results(i).lcoh, toc(t0));
+    end
+end
+
+fprintf('\nTotal runtime: %.1f s\n', toc(tic_total));
+
+%% --- Summary Table 
+print_summary(results);
+
+%% --- Save Results --
+out_path = fullfile('results', sprintf('tea_results_%s.mat', datestr(now,'yyyymmdd_HHMMSS')));
+save(out_path, 'results', 'config');
+fprintf('Results saved to: %s\n', out_path);
+
+end
+
+function result = run_single_location(station, prices, config)
+% Run simulation + economics for one geographic location.
+
+t0 = tic;
+
+% 1. Load solar irradiance profile for this station
+[ghi, dhi, dni, timestamps] = extract_irradiance(station);
+
+% 2. Compute PV power output (simplified single-diode model)
+pv_power_kw = simulate_pv(ghi, dhi, dni, config.pv_capacity_kw, ...
+    station.Latitude, station.Longitude, timestamps);
+
+% 3. Match electricity price timestamps
+[prices_aligned, pv_aligned] = align_timeseries(prices, pv_power_kw, timestamps);
+
+% 4. Battery dispatch optimisation (price arbitrage)
+if config.optimize_battery
+    [grid_kw, battery_soc] = optimize_storage( ...
+        pv_aligned, prices_aligned, config.battery_kwh, config.electrolyzer_kw);
+else
+    [grid_kw, battery_soc] = simple_dispatch( ...
+        pv_aligned, config.battery_kwh, config.electrolyzer_kw);
+end
+
+% 5. Compute hydrogen production
+h2_kg_hourly = compute_h2_production(pv_aligned, grid_kw, config);
+annual_h2_kg = sum(h2_kg_hourly) * (8760 / numel(h2_kg_hourly));
+
+% 6. Economic signals
+capex        = compute_capex(config);
+opex_annual  = compute_opex(grid_kw, prices_aligned, annual_h2_kg, config);
+grid_fraction = sum(max(grid_kw, 0)) / ...
+    (sum(pv_aligned) + sum(max(grid_kw, 0)) + 1e-9);
+
+% 7. LCOH
+lcoh = calc_lcoh(capex, opex_annual, annual_h2_kg, config);
+
+% 8. NPV / IRR
+revenue_annual = annual_h2_kg * config.h2_sale_price_per_kg;
+[npv, irr, payback] = calc_npv(capex, opex_annual, revenue_annual, config);
+
+% 9. Pack result
+result.name           = station.Name;
+result.state          = station.State;
+result.lat            = station.Latitude;
+result.lon            = station.Longitude;
+result.lcoh           = lcoh;
+result.npv            = npv;
+result.irr            = irr;
+result.capex          = capex.total;
+result.opex_annual    = opex_annual.total;
+result.annual_h2_kg   = annual_h2_kg;
+result.grid_fraction  = grid_fraction;
+result.payback_years  = payback;
+result.solar_cf       = sum(pv_aligned) / (config.pv_capacity_kw * numel(pv_aligned));
+result.sim_time_s     = toc(t0);
+
+end
+
+function config = default_config()
+% Default techno-economic parameters.
+% All monetary values in 2024 USD.
+
+config.years              = 20;       % Project lifetime [years]
+config.discount_rate      = 0.08;     % WACC [fraction]
+config.inflation_rate     = 0.03;     % Annual inflation
+
+% System sizing
+config.pv_capacity_kw     = 1000;     % PV nameplate [kW]
+config.battery_kwh        = 500;      % Battery energy capacity [kWh]
+config.battery_kw         = 250;      % Battery power [kW]
+config.electrolyzer_kw    = 500;      % Electrolyzer power input [kW]
+
+% Electrolyzer (PEM)
+config.electrolyzer_efficiency = 0.70; % HHV efficiency [fraction]
+config.h2_hhv_kwh_per_kg  = 39.4;    % kWh/kg (HHV)
+config.stack_lifetime_hrs  = 80000;   % Hours before stack replacement
+
+% Capital costs (2024, $/kW or $/kWh)
+config.pv_cost_per_kw     = 900;      % $/kW installed
+config.electrolyzer_cost_per_kw = 1200; % $/kW (PEM, 2024)
+config.battery_cost_per_kwh = 280;    % $/kWh (LFP pack)
+config.bop_fraction       = 0.15;    % Balance-of-plant as fraction of equipment cost
+config.installation_fraction = 0.10; % Installation as fraction of equipment cost
+
+% Operating costs
+config.om_fraction        = 0.02;    % O&M as fraction of CAPEX/year
+config.water_cost_per_kg_h2 = 0.05; % $/kg-H₂ (9 L/kg, $0.005/L)
+config.stack_replacement_cost = 0.40; % Fraction of electrolyzer CAPEX
+
+% Revenue
+config.h2_sale_price_per_kg = 6.00;  % $/kg (wholesale, compressed)
+
+% Optimisation flags
+config.optimize_battery   = true;
+config.use_parallel       = true;
+
+end
+
+function capex = compute_capex(config)
+% Compute capital expenditure breakdown.
+
+capex.pv          = config.pv_capacity_kw * config.pv_cost_per_kw;
+capex.electrolyzer = config.electrolyzer_kw * config.electrolyzer_cost_per_kw;
+capex.battery     = config.battery_kwh * config.battery_cost_per_kwh;
+capex.equipment   = capex.pv + capex.electrolyzer + capex.battery;
+capex.bop         = capex.equipment * config.bop_fraction;
+capex.installation = capex.equipment * config.installation_fraction;
+capex.total       = capex.equipment + capex.bop + capex.installation;
+
+end
+
+function opex = compute_opex(grid_kw, prices, annual_h2_kg, config)
+% Compute annual operating expenditure breakdown.
+
+capex = compute_capex(config);
+
+opex.om          = capex.total * config.om_fraction;
+opex.electricity = sum(max(grid_kw, 0) .* prices) / numel(prices) * 8760;
+opex.water       = annual_h2_kg * config.water_cost_per_kg_h2;
+
+% Stack replacement (amortised over stack lifetime)
+annual_hrs       = 8760;
+replacements_per_year = annual_hrs / config.stack_lifetime_hrs;
+opex.stack_replacement = replacements_per_year * ...
+    capex.electrolyzer * config.stack_replacement_cost;
+
+opex.total = opex.om + opex.electricity + opex.water + opex.stack_replacement;
+
+end
+
+function print_summary(results)
+% Print formatted summary table to console.
+
+fprintf('\n%-20s %10s %10s %10s %10s %12s\n', ...
+    'Location', 'LCOH$/kg', 'NPV $M', 'IRR %', 'GridFrac', 'H2 t/yr');
+fprintf('%s\n', repmat('-', 1, 78));
+
+for i = 1:numel(results)
+    fprintf('%-20s %10.2f %10.2f %10.1f %9.1f%% %12.1f\n', ...
+        results(i).name, ...
+        results(i).lcoh, ...
+        results(i).npv / 1e6, ...
+        results(i).irr * 100, ...
+        results(i).grid_fraction * 100, ...
+        results(i).annual_h2_kg / 1000);
+end
+
+[~, best] = min([results.lcoh]);
+fprintf('\nBest location: %s (LCOH = $%.2f/kg)\n', ...
+    results(best).name, results(best).lcoh);
+
+end
