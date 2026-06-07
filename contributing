@@ -1,0 +1,40 @@
+# Contributing to Green Hydrogen TEA Framework
+
+Thank you for your interest in contributing! This project welcomes contributions from researchers, engineers, and sustainability practitioners.
+
+## How to Contribute
+
+### Reporting Issues
+- Use GitHub Issues for bugs, feature requests, and questions
+- Include MATLAB version, OS, and a minimal reproducible example
+- Tag issues with: `bug`, `enhancement`, `data`, `documentation`
+
+### Submitting Pull Requests
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/sensitivity-analysis`
+3. Write tests for new functions in `tests/`
+4. Ensure all tests pass: run `matlab -batch "run_tests()"` 
+5. Update documentation if you change function signatures
+6. Submit PR with a clear description of changes and motivation
+
+### Code Style
+
+- Use descriptive variable names (`annual_h2_kg` not `x`)
+- Add a function header comment block with `Usage`, `Inputs`, `Outputs`
+- Keep functions under 150 lines; split into sub-functions otherwise
+- All monetary values in 2024 USD unless otherwise noted in variable name
+- Use `validateattributes` for input validation in public functions
+
+### Priority Contribution Areas
+
+- [ ] Sensitivity analysis / tornado charts (`src/analysis/run_sensitivity.m`)
+- [ ] IRA Section 45V tax credit integration
+- [ ] Additional ISO price importers (CAISO, ERCOT, MISO)
+- [ ] Wind energy integration alongside solar
+- [ ] Report generation (`src/visualization/generate_report.m`)
+- [ ] More location data in `data/locations/`
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.
