@@ -1,29 +1,6 @@
-# 🟢 Green Hydrogen Techno-Economic Assessment (TEA) Framework
-
-[![MATLAB](https://img.shields.io/badge/MATLAB-R2023b+-blue?logo=mathworks)](https://mathworks.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![CI](https://github.com/your-org/green-hydrogen-tea/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/green-hydrogen-tea/actions)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.placeholder.svg)](https://doi.org/10.5281/zenodo.placeholder)
+# Green Hydrogen Techno-Economic Assessment (TEA) Framework
 
 > An early-stage economic feasibility framework for green hydrogen production systems powered by renewable energy, developed as part of the MathWorks Sustainability Challenge.
-
----
-
-## 📋 Table of Contents
-
-- [Motivation](#motivation)
-- [Project Overview](#project-overview)
-- [System Architecture](#system-architecture)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
-- [Usage](#usage)
-- [Results](#results)
-- [Limitations](#limitations)
-- [Contributing](#contributing)
-- [License](#license)
-
----
-
 ## Motivation
 
 Global greenhouse gas emissions from **transportation**, **electricity generation**, and **industrial processes** account for the majority of climate change drivers. Green hydrogen — produced via water electrolysis powered by renewable energy — offers a pathway to decarbonize energy-dense sectors like aviation and industrial manufacturing.
